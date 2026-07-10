@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 import shutil
-from typing import Dict, Iterable, List
+from typing import Dict, List
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -360,16 +361,16 @@ def make_all_outputs(output_root: str | Path | None = None) -> Dict[str, List[Pa
 
     regenerated: List[Path] = []
     for func in (
-        plot_weibel_dispersion,
-        plot_weibel_equilibria,
-        plot_weibel_energy_histories,
-        plot_weibel_fourier_modes,
-        plot_weibel_distribution_samples,
-        plot_weibel_landscapes,
-        plot_weibel_sensitivity,
-        plot_two_stream_equilibrium,
-        plot_two_stream_optimizer,
-        plot_two_stream_landscapes,
+            plot_weibel_dispersion,
+            plot_weibel_equilibria,
+            plot_weibel_energy_histories,
+            plot_weibel_fourier_modes,
+            plot_weibel_distribution_samples,
+            plot_weibel_landscapes,
+            plot_weibel_sensitivity,
+            plot_two_stream_equilibrium,
+            plot_two_stream_optimizer,
+            plot_two_stream_landscapes,
     ):
         _progress(f"Generating {func.__name__}...")
         generated_now = func(regenerated_dir)

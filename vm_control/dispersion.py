@@ -26,14 +26,14 @@ def weibel_L_G(s, k: float = 1.25, v_th: float = 0.3, temperature_ratio: float =
 
 def weibel_D2(s, k: float = 1.25, v_th: float = 0.3, temperature_ratio: float = 12.0):
     """Magnetic/transverse dispersion function D2(k,s)."""
-    return k**2 + np.asarray(s) ** 2 + 1.0 - k**2 * weibel_L_G(s, k, v_th, temperature_ratio)
+    return k ** 2 + np.asarray(s) ** 2 + 1.0 - k ** 2 * weibel_L_G(s, k, v_th, temperature_ratio)
 
 
 def weibel_D2_grid(
-    k: float = 1.25,
-    sigma_points: int = 501,
-    omega_points: int = 501,
-    chunk_size: int = 64,
+        k: float = 1.25,
+        sigma_points: int = 501,
+        omega_points: int = 501,
+        chunk_size: int = 64,
 ):
     """Compute |D2| on a complex-s grid for the Weibel dispersion relation."""
     sigma = np.linspace(0.0, 1.0, sigma_points)

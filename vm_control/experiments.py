@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import ceil, pi
-from typing import Dict, Tuple
+from typing import Dict
 
 import jax.numpy as jnp
 import numpy as np
@@ -42,16 +42,16 @@ def make_grids(spec: GridSpec):
 
 
 def make_weibel_initial_condition(
-    grid_x,
-    grid_vx,
-    grid_vy,
-    *,
-    k0: float = 1.25,
-    mode: int = 3,
-    v_th: float = 0.3,
-    temperature_ratio: float = 12.0,
-    alpha: float = 1e-3,
-    net_B_amplitude: float = 1e-3,
+        grid_x,
+        grid_vx,
+        grid_vy,
+        *,
+        k0: float = 1.25,
+        mode: int = 3,
+        v_th: float = 0.3,
+        temperature_ratio: float = 12.0,
+        alpha: float = 1e-3,
+        net_B_amplitude: float = 1e-3,
 ):
     """Construct the Weibel initial condition used by the linear-control test.
 
@@ -62,7 +62,7 @@ def make_weibel_initial_condition(
     X, VX, VY = jnp.meshgrid(grid_x, grid_vx, grid_vy, indexing="ij")
     vth2 = float(v_th) ** 2
     tr = float(temperature_ratio)
-    f0 = (1.0 / (jnp.pi * vth2 * jnp.sqrt(tr))) * jnp.exp(-((VX**2 + (VY**2) / tr) / vth2))
+    f0 = (1.0 / (jnp.pi * vth2 * jnp.sqrt(tr))) * jnp.exp(-((VX ** 2 + (VY ** 2) / tr) / vth2))
     f0 = f0 * (1.0 + alpha * jnp.cos(mode * k0 * X))
     B0 = net_B_amplitude * jnp.cos(mode * k0 * grid_x)
     Ey0 = jnp.zeros_like(grid_x)
@@ -70,18 +70,18 @@ def make_weibel_initial_condition(
 
 
 def run_weibel_simulation(
-    *,
-    n_x: int = 32,
-    n_vx: int = 64,
-    n_vy: int = 64,
-    t_end: float = 2.0,
-    delta_t: float = 0.1,
-    k0: float = 1.25,
-    mode: int = 3,
-    v_th: float = 0.3,
-    temperature_ratio: float = 12.0,
-    alpha: float = 1e-3,
-    net_B_amplitude: float = 1e-3,
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        k0: float = 1.25,
+        mode: int = 3,
+        v_th: float = 0.3,
+        temperature_ratio: float = 12.0,
+        alpha: float = 1e-3,
+        net_B_amplitude: float = 1e-3,
 ) -> Dict[str, np.ndarray]:
     """Run one Weibel simulation and return NumPy arrays.
 
@@ -108,15 +108,15 @@ def run_weibel_simulation(
 
 
 def make_two_stream_initial_condition(
-    grid_x,
-    grid_vx,
-    grid_vy,
-    *,
-    beta: float = 0.5,
-    v_th: float = 0.2,
-    v_bar: float = 0.7,
-    alpha: float = 1e-3,
-    params=None,
+        grid_x,
+        grid_vx,
+        grid_vy,
+        *,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        params=None,
 ):
     """Construct the two-stream initial condition.
 
@@ -125,9 +125,9 @@ def make_two_stream_initial_condition(
     ``(a_k, b_k, c_k, d_k)``.
     """
     X, VX, VY = jnp.meshgrid(grid_x, grid_vx, grid_vy, indexing="ij")
-    prefactor = 1.0 / (2.0 * jnp.pi * v_th**2)
-    term_x = jnp.exp(-((VX - v_bar) ** 2) / v_th**2) + jnp.exp(-((VX + v_bar) ** 2) / v_th**2)
-    term_y = jnp.exp(-(VY**2) / v_th**2)
+    prefactor = 1.0 / (2.0 * jnp.pi * v_th ** 2)
+    term_x = jnp.exp(-((VX - v_bar) ** 2) / v_th ** 2) + jnp.exp(-((VX + v_bar) ** 2) / v_th ** 2)
+    term_y = jnp.exp(-(VY ** 2) / v_th ** 2)
     f0 = prefactor * term_x * term_y * (1.0 + alpha * jnp.sin(beta * X))
 
     if params is None:
@@ -145,18 +145,18 @@ def make_two_stream_initial_condition(
 
 
 def run_two_stream_simulation(
-    *,
-    n_x: int = 32,
-    n_vx: int = 64,
-    n_vy: int = 64,
-    t_end: float = 2.0,
-    delta_t: float = 0.1,
-    beta: float = 0.5,
-    v_th: float = 0.2,
-    v_bar: float = 0.7,
-    alpha: float = 1e-3,
-    params=None,
-    use_best_params: bool = False,
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        params=None,
+        use_best_params: bool = False,
 ) -> Dict[str, np.ndarray]:
     """Run one two-stream simulation and return NumPy arrays."""
     if use_best_params:

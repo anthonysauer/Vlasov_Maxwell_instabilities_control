@@ -16,7 +16,7 @@ def weibel_equilibrium(vx, vy, v_th: float = 0.3, temperature_ratio: float = 12.
     vth2 = float(v_th) ** 2
     tr = float(temperature_ratio)
     return (1.0 / (np.pi * vth2 * np.sqrt(tr))) * np.exp(
-        -((vx**2) + (vy**2) / tr) / vth2
+        -((vx ** 2) + (vy ** 2) / tr) / vth2
     )
 
 
@@ -27,7 +27,7 @@ def two_stream_equilibrium(vx, vy, v_th: float = 0.2, v_bar: float = 0.7):
     vth2 = float(v_th) ** 2
     prefactor = 1.0 / (2.0 * np.pi * vth2)
     term_x = np.exp(-((vx - v_bar) ** 2) / vth2) + np.exp(-((vx + v_bar) ** 2) / vth2)
-    term_y = np.exp(-(vy**2) / vth2)
+    term_y = np.exp(-(vy ** 2) / vth2)
     return prefactor * term_x * term_y
 
 
