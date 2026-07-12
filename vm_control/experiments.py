@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from math import ceil, pi
 from typing import Dict
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -144,7 +145,7 @@ def make_two_stream_initial_condition(
     return f0, B0, Ey0
 
 
-def run_two_stream_simulation(
+def run_two_stream_simulation_jnp(
         *,
         n_x: int = 32,
         n_vx: int = 64,
@@ -157,7 +158,7 @@ def run_two_stream_simulation(
         alpha: float = 1e-3,
         params=None,
         use_best_params: bool = False,
-) -> Dict[str, np.ndarray]:
+) -> tuple[tuple[jax.Array, ...], jax.Array, jax.Array, jax.Array]:
     """Run one two-stream simulation and return NumPy arrays."""
     if use_best_params:
         params = two_stream_best_params()
@@ -176,6 +177,37 @@ def run_two_stream_simulation(
     )
     n_steps = ceil(float(t_end) / float(delta_t))
     result = solver_jit(f0, B0, Ey0, grid_x, grid_vx, grid_vy, float(delta_t), n_steps, 1)
+    return result, grid_x, grid_vx, grid_vy
+
+
+def run_two_stream_simulation(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        params=None,
+        use_best_params: bool = False,
+) -> Dict[str, np.ndarray]:
+    """Run one two-stream simulation and return NumPy arrays."""
+    result, grid_x, grid_vx, grid_vy = run_two_stream_simulation_jnp(
+        n_x=n_x,
+        n_vx=n_vx,
+        n_vy=n_vy,
+        t_end=t_end,
+        delta_t=delta_t,
+        beta=beta,
+        v_th=v_th,
+        v_bar=v_bar,
+        alpha=alpha,
+        params=params,
+        use_best_params=use_best_params,
+    )
     return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
 
 
@@ -223,5 +255,6 @@ __all__ = [
     "make_weibel_initial_condition",
     "make_two_stream_initial_condition",
     "run_weibel_simulation",
+    "run_two_stream_simulation_jnp",
     "run_two_stream_simulation",
 ]
