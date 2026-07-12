@@ -8,7 +8,7 @@ README; use those values when running the expensive full simulations.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, pi
+from math import ceil, floor, pi
 from typing import Dict
 
 import jax
@@ -211,6 +211,219 @@ def run_two_stream_simulation(
     return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
 
 
+def evolve_external_fields(params, t, grid_x, beta: float = 0.5):
+    params = jnp.asarray(params, dtype=jnp.float32).reshape((-1, 4))
+    k_count = params.shape[0]
+    a, b, c, d = params[:, 0:1], params[:, 1:2], params[:, 2:3], params[:, 3:4]
+    cos_minus_array = jnp.stack(
+        [jnp.cos((k + 1) * beta * (grid_x - t)) for k in range(k_count)], axis=0
+    )
+    cos_plus_array = jnp.stack(
+        [jnp.cos((k + 1) * beta * (grid_x + t)) for k in range(k_count)], axis=0
+    )
+    sin_minus_array = jnp.stack(
+        [jnp.sin((k + 1) * beta * (grid_x - t)) for k in range(k_count)], axis=0
+    )
+    sin_plus_array = jnp.stack(
+        [jnp.sin((k + 1) * beta * (grid_x + t)) for k in range(k_count)], axis=0
+    )
+    B_ext = jnp.sum(
+        a * cos_minus_array - b * sin_plus_array + c * sin_minus_array - d * cos_plus_array, axis=0
+    )
+    Ey_ext = jnp.sum(
+        a * cos_minus_array + b * sin_plus_array + c * sin_minus_array + d * cos_plus_array, axis=0
+    )
+    return B_ext, Ey_ext
+
+
+def run_two_stream_simulation_adaptive_jnp(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        delta_t_control: float = 1.0,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        params=None,
+        # use_best_params: bool = False,
+) -> tuple[tuple[jax.Array, ...], jax.Array, jax.Array, jax.Array]:
+    """Run two-stream simulation with adaptive external fields and return jax arrays."""
+    # if use_best_params:
+    #     params = two_stream_best_params()
+    length_x = 2.0 * pi / float(beta)
+    spec = GridSpec(n_x, n_vx, n_vy, 0.0, length_x, -2.5, 2.5, -2.5, 2.5)
+    grid_x, grid_vx, grid_vy = make_grids(spec)
+
+    n_control = floor(float(t_end) / float(delta_t_control))
+    params = jnp.asarray(params, dtype=jnp.float32).reshape((n_control, -1))
+
+    n_steps_per_control = ceil(float(delta_t_control) / float(delta_t))
+
+    def iteration_step(carry, _):
+        i, f_old, _, Ey_old, B_old = carry
+
+        # Calculate evolution of old external fields: (1.5) in laser control paper
+        B_ext_old, Ey_ext_old = evolve_external_fields(params[i - 1], t=n_steps_per_control, grid_x=grid_x, beta=beta)
+
+        # Calculate evolution of new external fields
+        B_ext_new, Ey_ext_new = evolve_external_fields(params[i], t=n_steps_per_control, grid_x=grid_x, beta=beta)
+
+        # Substitute in new external fields
+        B0_new = B_old - B_ext_old + B_ext_new
+        Ey0_new = Ey_old - Ey_ext_old + Ey_ext_new
+
+        # Solve until next external field update
+        result = solver_jit(f_old, B0_new, Ey0_new, grid_x, grid_vx, grid_vy, float(delta_t), n_steps_per_control, 1)
+        (
+            f_new,
+            E_x_energy,
+            E_y_energy,
+            B_energy,
+            kinetic_energy,
+            r_x,
+            r_y,
+            F_B,
+            F_Ex,
+            F_Ey,
+            Ex_new,
+            Ey_new,
+            B_new,
+        ) = result
+
+        carry = (i + 1, f_new, Ex_new, Ey_new, B_new)
+        outputs = (
+            E_x_energy,
+            E_y_energy,
+            B_energy,
+            kinetic_energy,
+            r_x,
+            r_y,
+            F_B,
+            F_Ex,
+            F_Ey,
+        )
+        return carry, outputs
+
+    # Initialize scan with first solve
+    f0, B0, Ey0 = make_two_stream_initial_condition(
+        grid_x,
+        grid_vx,
+        grid_vy,
+        beta=beta,
+        v_th=v_th,
+        v_bar=v_bar,
+        alpha=alpha,
+        params=params[0],
+    )
+    result_init = solver_jit(f0, B0, Ey0, grid_x, grid_vx, grid_vy, float(delta_t), n_steps_per_control, 1)
+    (
+        f_init,
+        E_x_energy_init,
+        E_y_energy_init,
+        B_energy_init,
+        kinetic_energy_init,
+        r_x_init,
+        r_y_init,
+        F_B_init,
+        F_Ex_init,
+        F_Ey_init,
+        Ex_init,
+        Ey_init,
+        B_init,
+    ) = result_init
+    initial_carry = (
+        1,
+        f_init,
+        Ex_init,
+        Ey_init,
+        B_init,
+    )
+
+    # Perform the scan over the remaining (n_control - 1) iterations
+    final_carry, final_outputs = jax.lax.scan(iteration_step, initial_carry, None, length=n_control - 1)
+
+    # Unpack the final carry
+    _, f_end, Ex_final, Ey_final, B_final = final_carry
+
+    # Unpack the outputs
+    (
+        electric_energy_E_x,
+        electric_energy_E_y,
+        magnetic_energy_history,
+        kinetic_energy_history,
+        r_x_history,
+        r_y_history,
+        Fourier_mode_B,
+        Fourier_mode_E_x,
+        Fourier_mode_E_y,
+    ) = final_outputs
+
+    # Add the initial output to the beginning
+    electric_energy_E_x_full = jnp.concatenate([E_x_energy_init[None, :], electric_energy_E_x], axis=0)
+    electric_energy_E_y_full = jnp.concatenate([E_y_energy_init[None, :], electric_energy_E_y], axis=0)
+    magnetic_energy_history_full = jnp.concatenate([B_energy_init[None, :], magnetic_energy_history], axis=0)
+    kinetic_energy_history_full = jnp.concatenate([kinetic_energy_init[None, :], kinetic_energy_history], axis=0)
+    r_x_history_full = jnp.concatenate([r_x_init[None, :], r_x_history], axis=0)
+    r_y_history_full = jnp.concatenate([r_y_init[None, :], r_y_history], axis=0)
+    Fourier_mode_B_full = jnp.concatenate([F_B_init[None, :], Fourier_mode_B], axis=0)
+    Fourier_mode_E_x_full = jnp.concatenate([F_Ex_init[None, :], Fourier_mode_E_x], axis=0)
+    Fourier_mode_E_y_full = jnp.concatenate([F_Ey_init[None, :], Fourier_mode_E_y], axis=0)
+
+    # Return the final state and histories
+    return (
+        f_end,
+        electric_energy_E_x_full,
+        electric_energy_E_y_full,
+        magnetic_energy_history_full,
+        kinetic_energy_history_full,
+        r_x_history_full,
+        r_y_history_full,
+        Fourier_mode_B_full,
+        Fourier_mode_E_x_full,
+        Fourier_mode_E_y_full,
+        Ex_final,
+        Ey_final,
+        B_final
+    ), grid_x, grid_vx, grid_vy
+
+
+def run_two_stream_simulation_adaptive(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        delta_t_control: float = 1.0,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        params=None,
+        # use_best_params: bool = False,
+) -> Dict[str, np.ndarray]:
+    """Run one two-stream simulation with adaptive external fields and return NumPy arrays."""
+    result, grid_x, grid_vx, grid_vy = run_two_stream_simulation_adaptive_jnp(
+        n_x=n_x,
+        n_vx=n_vx,
+        n_vy=n_vy,
+        t_end=t_end,
+        delta_t=delta_t,
+        delta_t_control=delta_t_control,
+        beta=beta,
+        v_th=v_th,
+        v_bar=v_bar,
+        alpha=alpha,
+        params=params,
+        # use_best_params=use_best_params,
+    )
+    return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
+
+
 def _solver_result_to_dict(result, delta_t: float, grid_x, grid_vx, grid_vy) -> Dict[str, np.ndarray]:
     (
         f_end,
@@ -257,4 +470,6 @@ __all__ = [
     "run_weibel_simulation",
     "run_two_stream_simulation_jnp",
     "run_two_stream_simulation",
+    "run_two_stream_simulation_adaptive_jnp",
+    "run_two_stream_simulation_adaptive",
 ]
