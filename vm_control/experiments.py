@@ -263,21 +263,17 @@ def run_two_stream_simulation_adaptive_jnp(
 
     n_steps_per_control = ceil(float(delta_t_control) / float(delta_t))
 
-    def iteration_step(carry, _):
-        i, f_old, _, Ey_old, B_old = carry
-
-        # Calculate evolution of old external fields: (1.5) in laser control paper
-        B_ext_old, Ey_ext_old = evolve_external_fields(params[i - 1], t=n_steps_per_control, grid_x=grid_x, beta=beta)
-
-        # Calculate evolution of new external fields
-        B_ext_new, Ey_ext_new = evolve_external_fields(params[i], t=n_steps_per_control, grid_x=grid_x, beta=beta)
+    def iteration_step(carry, precomputed_fields):
+        f_old, _, Ey_old, B_old = carry
+        B_ext_old, Ey_ext_old, B_ext_new, Ey_ext_new = precomputed_fields
 
         # Substitute in new external fields
-        B0_new = B_old - B_ext_old + B_ext_new
-        Ey0_new = Ey_old - Ey_ext_old + Ey_ext_new
+        B_init_new = B_old - B_ext_old + B_ext_new
+        Ey_init_new = Ey_old - Ey_ext_old + Ey_ext_new
 
         # Solve until next external field update
-        result = solver_jit(f_old, B0_new, Ey0_new, grid_x, grid_vx, grid_vy, float(delta_t), n_steps_per_control, 1)
+        result = solver_jit(f_old, B_init_new, Ey_init_new, grid_x, grid_vx, grid_vy, float(delta_t),
+                            n_steps_per_control, 1)
         (
             f_new,
             E_x_energy,
@@ -294,7 +290,7 @@ def run_two_stream_simulation_adaptive_jnp(
             B_new,
         ) = result
 
-        carry = (i + 1, f_new, Ex_new, Ey_new, B_new)
+        carry = (f_new, Ex_new, Ey_new, B_new)
         outputs = (
             E_x_energy,
             E_y_energy,
@@ -336,18 +332,27 @@ def run_two_stream_simulation_adaptive_jnp(
         B_init,
     ) = result_init
     initial_carry = (
-        1,
         f_init,
         Ex_init,
         Ey_init,
         B_init,
     )
 
+    # Pre-compute the external field evolution for the entire simulation
+    params_old = params[0: n_control - 1]
+    params_new = params[1: n_control]
+    ts = jnp.arange(1, n_control, dtype=jnp.float32) * float(delta_t_control)
+
+    vmap_evolve = jax.vmap(evolve_external_fields, in_axes=(0, 0, None, None))
+    B_ext_old_history, Ey_ext_old_history = vmap_evolve(params_old, ts, grid_x, beta)
+    B_ext_new_history, Ey_ext_new_history = vmap_evolve(params_new, ts, grid_x, beta)
+
     # Perform the scan over the remaining (n_control - 1) iterations
-    final_carry, final_outputs = jax.lax.scan(iteration_step, initial_carry, None, length=n_control - 1)
+    scan_inputs = (B_ext_old_history, Ey_ext_old_history, B_ext_new_history, Ey_ext_new_history)
+    final_carry, final_outputs = jax.lax.scan(iteration_step, initial_carry, xs=scan_inputs, length=n_control - 1)
 
     # Unpack the final carry
-    _, f_end, Ex_final, Ey_final, B_final = final_carry
+    f_end, Ex_final, Ey_final, B_final = final_carry
 
     # Unpack the outputs
     (
