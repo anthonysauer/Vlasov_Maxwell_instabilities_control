@@ -36,7 +36,7 @@ def main() -> None:
         "best_objective": best_objective,
         "best_epoch": best_epoch,
     }
-    np.savez(PRECOMPUTED_DIR / "two_stream_optimization_adam_adaptive.npz", **output_dict)
+    np.savez(PRECOMPUTED_DIR / "two_stream_optimization_adam_noise_adaptive.npz", **output_dict)
 
 
 if __name__ == "__main__":

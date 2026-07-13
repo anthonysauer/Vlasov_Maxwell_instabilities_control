@@ -8,8 +8,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jax import random
 
-def adam(step_size, b1=0.9, b2=0.999, eps=1e-8):
+
+def adam(step_size, b1=0.9, b2=0.999, eps=1e-8, sigma=1e-7):
     """Construct optimizer triple for Adam.
 
     Args:
@@ -21,27 +23,33 @@ def adam(step_size, b1=0.9, b2=0.999, eps=1e-8):
         for the second moment estimates (default 0.999).
       eps: optional, a positive scalar value for epsilon, a small constant for
         numerical stability (default 1e-8).
+      sigma: standard deviation of Gaussian perturbation (default 1e-7).
 
     Returns:
       An (init_fun, update_fun, get_params) triple.
     """
 
     def init(x0):
+        init_key = random.PRNGKey(0)
         m0 = jnp.zeros_like(x0)
         v0 = jnp.zeros_like(x0)
-        return x0, m0, v0
+        return init_key, x0, m0, v0
 
     def update(i, g, state):
-        x, m, v = state
+        key, x, m, v = state
+        key, subkey = random.split(key)
         m = (1 - b1) * g + b1 * m  # First  moment estimate.
         v = (1 - b2) * jnp.square(g) + b2 * v  # Second moment estimate.
         mhat = m / (1 - jnp.asarray(b1, m.dtype) ** (i + 1))  # Bias correction.
         vhat = v / (1 - jnp.asarray(b2, m.dtype) ** (i + 1))
-        x = x - step_size * mhat / (jnp.sqrt(vhat) + eps)
-        return x, m, v
+
+        # Add Gaussian perturbation
+        xi = sigma * random.normal(subkey, x.shape)
+        x = x - step_size * mhat / (jnp.sqrt(vhat) + eps) + xi
+        return key, x, m, v
 
     def get_params(state):
-        x, _, _ = state
+        _, x, _, _ = state
         return x
 
     return init, update, get_params
@@ -51,9 +59,10 @@ def optimize_adam(
         J: Callable[[jax.Array], jax.Array],
         params_init,
         step_size: float,
-        b1=0.9,
-        b2=0.999,
-        eps=1e-8,
+        b1: float = 0.9,
+        b2: float = 0.999,
+        eps: float = 1e-8,
+        sigma: float = 1e-7,
         max_iterations: int = 20000,
 ) -> tuple[np.ndarray, np.ndarray, float, int]:
     opt_init, opt_update, get_params = adam(
@@ -61,6 +70,7 @@ def optimize_adam(
         b1=b1,
         b2=b2,
         eps=eps,
+        sigma=sigma,
     )
     opt_state = opt_init(params_init)
     value_and_grad_fn = jax.jit(jax.value_and_grad(J))
