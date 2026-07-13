@@ -127,7 +127,8 @@ def solve_poisson(rho, grid_x, dx):
 
     # Compute E_hat using Poisson's equation: E_k = (hat{1} - rho_hat) / (ik)
     # Handle k=0 to avoid division by zero by setting E_hat[0] = 0
-    E_hat = jnp.where(k != 0, (- one_hat + rho_hat) / ik, 0.0)
+    ik_safe = jnp.where(k != 0, ik, 1.0)
+    E_hat = jnp.where(k != 0, (- one_hat + rho_hat) / ik_safe, 0.0)
 
     # Inverse Fourier transform to get E in physical space
     E = jnp.fft.ifft(E_hat).real  # Assuming E is real
@@ -220,7 +221,8 @@ def update_f_E_drift_system(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, del
 
     # Compute the ratio v_y / v_x, handling v_x = 0
     # Shape: [1, N_vx, N_vy]
-    ratio_vy_vx = jnp.where(v_x_reshaped != 0, v_y_reshaped / v_x_reshaped, 0.0)
+    v_x_safe = jnp.where(v_x_reshaped != 0, v_x_reshaped, 1.0)
+    ratio_vy_vx = jnp.where(v_x_reshaped != 0, v_y_reshaped / v_x_safe, 0.0)
 
     # Compute the integrand for E_y_new in Fourier space:
     # When v_x != 0: (v_y / v_x) * (exp_factor - 1) * f_hat
