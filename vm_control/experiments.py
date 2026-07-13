@@ -445,7 +445,7 @@ def _solver_result_to_dict(result, delta_t: float, grid_x, grid_vx, grid_vy) -> 
         Ey_final,
         B_final,
     ) = result
-    n = int(np.asarray(E_x_energy).shape[0])
+    n = int(np.asarray(E_x_energy).flatten().shape[0])
     return {
         "time": np.arange(n, dtype=np.float64) * float(delta_t),
         "f_end": np.asarray(f_end),
