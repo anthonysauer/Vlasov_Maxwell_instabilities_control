@@ -3,7 +3,7 @@ import numpy as np
 from math import floor
 
 from vm_control.data import PRECOMPUTED_DIR
-from vm_control.optimizer_adam import optimize_adam
+from vm_control.optimizer_adam import optimize_adam, cosine_decay
 from vm_control.optimizer_objectives import two_stream_adaptive_objective
 
 
@@ -23,11 +23,13 @@ def main() -> None:
     K = 5
     n_control = floor(float(t_end) / float(delta_t_control))
     params_init = np.zeros(4 * K * n_control)
+    step_size = 0.001
+    max_iterations = 10
     loss_history, best_params, best_objective, best_epoch = optimize_adam(
         objective,
         params_init,
-        step_size=0.001,
-        max_iterations=10
+        step_size=cosine_decay(step_size, max_iterations),
+        max_iterations=max_iterations
     )
 
     output_dict = {

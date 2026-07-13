@@ -11,6 +11,15 @@ import numpy as np
 from jax import random
 
 
+def cosine_decay(step_size, decay_steps, alpha=0.0, exponent=1.0):
+    def schedule(i):
+        cosine_decay_rate = 0.5 * (1 + jnp.cos(jnp.pi * i / decay_steps))
+        decay_rate = (1 - alpha) * cosine_decay_rate ** exponent + alpha
+        return step_size * decay_rate
+
+    return schedule
+
+
 def adam(step_size, b1=0.9, b2=0.999, eps=1e-8, sigma=1e-7):
     """Construct optimizer triple for Adam.
 
@@ -43,9 +52,10 @@ def adam(step_size, b1=0.9, b2=0.999, eps=1e-8, sigma=1e-7):
         mhat = m / (1 - jnp.asarray(b1, m.dtype) ** (i + 1))  # Bias correction.
         vhat = v / (1 - jnp.asarray(b2, m.dtype) ** (i + 1))
 
-        # Add Gaussian perturbation
+        # Adam update step with Gaussian perturbation
+        current_lr = step_size(i) if callable(step_size) else step_size
         xi = sigma * random.normal(subkey, x.shape)
-        x = x - step_size * mhat / (jnp.sqrt(vhat) + eps) + xi
+        x = x - current_lr * mhat / (jnp.sqrt(vhat) + eps) + xi
         return key, x, m, v
 
     def get_params(state):
@@ -58,7 +68,7 @@ def adam(step_size, b1=0.9, b2=0.999, eps=1e-8, sigma=1e-7):
 def optimize_adam(
         J: Callable[[jax.Array], jax.Array],
         params_init,
-        step_size: float,
+        step_size: float | Callable[[int], float],
         b1: float = 0.9,
         b2: float = 0.999,
         eps: float = 1e-8,
