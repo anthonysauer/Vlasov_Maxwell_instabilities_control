@@ -14,9 +14,10 @@ from typing import Dict
 import jax
 import jax.numpy as jnp
 import numpy as np
+from flax import nnx
 
 from .profiles import two_stream_best_params
-from .solver import solver_jit
+from .solver import solver_jit, compute_rho
 
 
 @dataclass(frozen=True)
@@ -429,6 +430,220 @@ def run_two_stream_simulation_adaptive(
     return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
 
 
+def run_two_stream_simulation_nnx_jnp(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        n_sensors: int = 8,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        delta_t_control: float = 1.0,
+        window: int = 2,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        model: nnx.Module,
+) -> tuple[tuple[jax.Array, ...], jax.Array, jax.Array, jax.Array]:
+    """Run two-stream simulation with adaptive external fields from an nnx model and return jax arrays."""
+    length_x = 2.0 * pi / float(beta)
+    spec = GridSpec(n_x, n_vx, n_vy, 0.0, length_x, -2.5, 2.5, -2.5, 2.5)
+    grid_x, grid_vx, grid_vy = make_grids(spec)
+    dvx = grid_vx[1] - grid_vx[0]
+    dvy = grid_vy[1] - grid_vy[0]
+
+    n_control = floor(float(t_end) / float(delta_t_control))
+    n_steps_per_control = ceil(float(delta_t_control) / float(delta_t))
+    observation_indices = jnp.round(jnp.linspace(0, n_x - 1, num=n_sensors)).astype(int)
+
+    def _solve_result_to_scan_outputs(f_old, B_old, Ey_old, *args):
+        result = solver_jit(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy, float(delta_t), n_steps_per_control, 1)
+        (
+            f_new,
+            E_x_energy,
+            E_y_energy,
+            B_energy,
+            kinetic_energy_history,
+            r_x,
+            r_y,
+            F_B,
+            F_Ex,
+            F_Ey,
+            Ex_new,
+            Ey_new,
+            B_new,
+        ) = result
+
+        carry = (f_new, Ex_new, Ey_new, B_new, *args)
+        outputs = (E_x_energy, E_y_energy, B_energy, kinetic_energy_history, r_x, r_y, F_B, F_Ex, F_Ey)
+        return carry, outputs
+
+    # Collect initial observations with no control
+    def no_control_iteration_step(carry, _):
+        f_old, _, Ey_old, B_old, observations_old = carry
+
+        # Density observations
+        rho = compute_rho(f_old, dvx, dvy)
+        rho_observations = rho[observation_indices]
+        observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
+
+        # Solve until next observation (no control)
+        return _solve_result_to_scan_outputs(f_old, B_old, Ey_old, observations_new)
+
+    # Initial solve from initial conditions
+    f0, B0, Ey0 = make_two_stream_initial_condition(
+        grid_x,
+        grid_vx,
+        grid_vy,
+        beta=beta,
+        v_th=v_th,
+        v_bar=v_bar,
+        alpha=alpha,
+    )
+    observations_no_control_init = jnp.zeros((window, n_sensors))
+    initial_carry_no_control = (f0, jnp.zeros(n_x), Ey0, B0, observations_no_control_init)
+
+    final_carry_no_control, final_outputs_no_control = jax.lax.scan(no_control_iteration_step,
+                                                                    initial_carry_no_control,
+                                                                    length=window - 1)
+
+    f_end_no_control, Ex_final_no_control, Ey_final_no_control, B_final_no_control, observations_final_no_control = final_carry_no_control
+    (
+        electric_energy_E_x_no_control,
+        electric_energy_E_y_no_control,
+        magnetic_energy_no_control,
+        kinetic_energy_no_control,
+        r_x_history_no_control,
+        r_y_history_no_control,
+        Fourier_mode_B_no_control,
+        Fourier_mode_E_x_no_control,
+        Fourier_mode_E_y_no_control,
+    ) = final_outputs_no_control
+
+    # Split the object into a static graph definition and a dynamic state dictionary
+    graphdef, model_state = nnx.split(model)
+
+    # Perform the scan over the remaining iterations with control
+    def iteration_step(carry, t):
+        f_old, _, Ey_old, B_old, params_old, observations_old, current_model_state = carry
+
+        # Merge model state back into a functional, callable model inside the loop
+        model_inside = nnx.merge(graphdef, current_model_state)
+
+        # Density observations
+        rho = compute_rho(f_old, dvx, dvy)
+        rho_observations = rho[observation_indices]
+        observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
+
+        # Compute new params based on density observations
+        params_new = model_inside(observations_new)
+
+        # Split again to capture any state changes (like RNG updates)
+        _, updated_model_state = nnx.split(model_inside)
+
+        # Substitute in new external fields
+        B_ext_old, Ey_ext_old = evolve_external_fields(params_old, t, grid_x, beta=beta)
+        B_ext_new, Ey_ext_new = evolve_external_fields(params_new, t, grid_x, beta=beta)
+
+        B_init_new = B_old - B_ext_old + B_ext_new
+        Ey_init_new = Ey_old - Ey_ext_old + Ey_ext_new
+
+        # Solve until next external field update
+        return _solve_result_to_scan_outputs(f_old, B_init_new, Ey_init_new, params_new, observations_new,
+                                             updated_model_state)
+
+    # Use shape of model output to initialize parameters
+    dummy_input = jnp.zeros(window * n_sensors)
+    output_shape = jax.eval_shape(model, dummy_input)
+    params_init = jnp.zeros(output_shape.shape)
+
+    initial_carry = (f_end_no_control, Ex_final_no_control, Ey_final_no_control, B_final_no_control, params_init,
+                     observations_final_no_control, model_state)
+    ts = jnp.arange(window - 1, n_control, dtype=jnp.float32) * float(delta_t_control)
+
+    final_carry, final_outputs = jax.lax.scan(iteration_step, initial_carry, xs=ts, length=n_control - window + 1)
+
+    # Unpack the final carry
+    f_end, Ex_final, Ey_final, B_final, _, _, _ = final_carry
+
+    # Unpack the outputs
+    (
+        electric_energy_E_x,
+        electric_energy_E_y,
+        magnetic_energy,
+        kinetic_energy,
+        r_x_history,
+        r_y_history,
+        Fourier_mode_B,
+        Fourier_mode_E_x,
+        Fourier_mode_E_y,
+    ) = final_outputs
+
+    # Add the initial and no-control output to the beginning
+    electric_energy_E_x_full = jnp.concatenate([electric_energy_E_x_no_control, electric_energy_E_x], axis=0)
+    electric_energy_E_y_full = jnp.concatenate([electric_energy_E_y_no_control, electric_energy_E_y], axis=0)
+    magnetic_energy_full = jnp.concatenate([magnetic_energy_no_control, magnetic_energy], axis=0)
+    kinetic_energy_full = jnp.concatenate([kinetic_energy_no_control, kinetic_energy], axis=0)
+    r_x_history_full = jnp.concatenate([r_x_history_no_control, r_x_history], axis=0)
+    r_y_history_full = jnp.concatenate([r_y_history_no_control, r_y_history], axis=0)
+    Fourier_mode_B_full = jnp.concatenate([Fourier_mode_B_no_control, Fourier_mode_B], axis=0)
+    Fourier_mode_E_x_full = jnp.concatenate([Fourier_mode_E_x_no_control, Fourier_mode_E_x], axis=0)
+    Fourier_mode_E_y_full = jnp.concatenate([Fourier_mode_E_y_no_control, Fourier_mode_E_y], axis=0)
+
+    # Return the final state and histories
+    return (
+        f_end,
+        electric_energy_E_x_full,
+        electric_energy_E_y_full,
+        magnetic_energy_full,
+        kinetic_energy_full,
+        r_x_history_full,
+        r_y_history_full,
+        Fourier_mode_B_full,
+        Fourier_mode_E_x_full,
+        Fourier_mode_E_y_full,
+        Ex_final,
+        Ey_final,
+        B_final
+    ), grid_x, grid_vx, grid_vy
+
+
+def run_two_stream_simulation_nnx(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        n_sensors: int = 8,
+        t_end: float = 2.0,
+        delta_t: float = 0.1,
+        delta_t_control: float = 1.0,
+        window: int = 2,
+        beta: float = 0.5,
+        v_th: float = 0.2,
+        v_bar: float = 0.7,
+        alpha: float = 1e-3,
+        model: nnx.Module,
+) -> Dict[str, np.ndarray]:
+    """Run one two-stream simulation with adaptive external fields and return NumPy arrays."""
+    result, grid_x, grid_vx, grid_vy = run_two_stream_simulation_nnx_jnp(
+        n_x=n_x,
+        n_vx=n_vx,
+        n_vy=n_vy,
+        n_sensors=n_sensors,
+        t_end=t_end,
+        delta_t=delta_t,
+        delta_t_control=delta_t_control,
+        window=window,
+        beta=beta,
+        v_th=v_th,
+        v_bar=v_bar,
+        alpha=alpha,
+        model=model,
+    )
+    return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
+
+
 def _solver_result_to_dict(result, delta_t: float, grid_x, grid_vx, grid_vy) -> Dict[str, np.ndarray]:
     (
         f_end,
@@ -477,4 +692,6 @@ __all__ = [
     "run_two_stream_simulation",
     "run_two_stream_simulation_adaptive_jnp",
     "run_two_stream_simulation_adaptive",
+    "run_two_stream_simulation_nnx_jnp",
+    "run_two_stream_simulation_nnx",
 ]
