@@ -485,7 +485,7 @@ def run_two_stream_simulation_nnx_jnp(
 
         # Density observations
         rho = compute_rho(f_old, dvx, dvy)
-        rho_observations = rho[observation_indices]
+        rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
         observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
 
         # Solve until next observation (no control)
@@ -533,7 +533,7 @@ def run_two_stream_simulation_nnx_jnp(
 
         # Density observations
         rho = compute_rho(f_old, dvx, dvy)
-        rho_observations = rho[observation_indices]
+        rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
         observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
 
         # Compute new params based on density observations
