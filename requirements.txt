@@ -12,3 +12,4 @@ tqdm
 flax
 optax
 orbax
+gymnasium
