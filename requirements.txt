@@ -13,3 +13,4 @@ flax
 optax
 orbax
 gymnasium
+stable-baselines3[extra]
