@@ -430,6 +430,66 @@ def run_two_stream_simulation_adaptive(
     return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
 
 
+def _solve_result_to_scan_outputs(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, *args):
+    result = solver_jit(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy, float(delta_t), n_steps_per_control, 1)
+    (
+        f_new,
+        E_x_energy,
+        E_y_energy,
+        B_energy,
+        kinetic_energy_history,
+        r_x,
+        r_y,
+        F_B,
+        F_Ex,
+        F_Ey,
+        Ex_new,
+        Ey_new,
+        B_new,
+    ) = result
+
+    carry = (f_new, Ex_new, Ey_new, B_new, *args)
+    outputs = (E_x_energy, E_y_energy, B_energy, kinetic_energy_history, r_x, r_y, F_B, F_Ex, F_Ey)
+    return carry, outputs
+
+
+def burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th, v_bar, alpha):
+    n_x = grid_x.shape[0]
+    dvx = grid_vx[1] - grid_vx[0]
+    dvy = grid_vy[1] - grid_vy[0]
+
+    # Collect initial observations with no control
+    def no_control_iteration_step(carry, _):
+        f_old, _, Ey_old, B_old, observations_old = carry
+
+        # Density observations
+        rho = compute_rho(f_old, dvx, dvy)
+        rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
+        observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
+
+        # Solve until next observation (no control)
+        return _solve_result_to_scan_outputs(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy, delta_t,
+                                             n_steps_per_control, observations_new)
+
+    # Initial solve from initial conditions
+    f0, B0, Ey0 = make_two_stream_initial_condition(
+        grid_x,
+        grid_vx,
+        grid_vy,
+        beta=beta,
+        v_th=v_th,
+        v_bar=v_bar,
+        alpha=alpha,
+    )
+    observations_no_control_init = jnp.zeros((window, n_sensors))
+    initial_carry_no_control = (f0, jnp.zeros(n_x), Ey0, B0, observations_no_control_init)
+
+    final_carry_no_control, final_outputs_no_control = jax.lax.scan(no_control_iteration_step,
+                                                                    initial_carry_no_control,
+                                                                    length=window - 1)
+    return *final_carry_no_control, *final_outputs_no_control
+
+
 def run_two_stream_simulation_nnx_jnp(
         *,
         n_x: int = 32,
@@ -455,61 +515,17 @@ def run_two_stream_simulation_nnx_jnp(
 
     n_control = floor(float(t_end) / float(delta_t_control))
     n_steps_per_control = ceil(float(delta_t_control) / float(delta_t))
-    observation_indices = jnp.round(jnp.linspace(0, n_x - 1, num=n_sensors)).astype(int)
+    # observation_indices = jnp.round(jnp.linspace(0, n_x - 1, num=n_sensors)).astype(int)
 
-    def _solve_result_to_scan_outputs(f_old, B_old, Ey_old, *args):
-        result = solver_jit(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy, float(delta_t), n_steps_per_control, 1)
-        (
-            f_new,
-            E_x_energy,
-            E_y_energy,
-            B_energy,
-            kinetic_energy_history,
-            r_x,
-            r_y,
-            F_B,
-            F_Ex,
-            F_Ey,
-            Ex_new,
-            Ey_new,
-            B_new,
-        ) = result
+    burn_in_outputs = burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th,
+                              v_bar, alpha, )
 
-        carry = (f_new, Ex_new, Ey_new, B_new, *args)
-        outputs = (E_x_energy, E_y_energy, B_energy, kinetic_energy_history, r_x, r_y, F_B, F_Ex, F_Ey)
-        return carry, outputs
-
-    # Collect initial observations with no control
-    def no_control_iteration_step(carry, _):
-        f_old, _, Ey_old, B_old, observations_old = carry
-
-        # Density observations
-        rho = compute_rho(f_old, dvx, dvy)
-        rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
-        observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
-
-        # Solve until next observation (no control)
-        return _solve_result_to_scan_outputs(f_old, B_old, Ey_old, observations_new)
-
-    # Initial solve from initial conditions
-    f0, B0, Ey0 = make_two_stream_initial_condition(
-        grid_x,
-        grid_vx,
-        grid_vy,
-        beta=beta,
-        v_th=v_th,
-        v_bar=v_bar,
-        alpha=alpha,
-    )
-    observations_no_control_init = jnp.zeros((window, n_sensors))
-    initial_carry_no_control = (f0, jnp.zeros(n_x), Ey0, B0, observations_no_control_init)
-
-    final_carry_no_control, final_outputs_no_control = jax.lax.scan(no_control_iteration_step,
-                                                                    initial_carry_no_control,
-                                                                    length=window - 1)
-
-    f_end_no_control, Ex_final_no_control, Ey_final_no_control, B_final_no_control, observations_final_no_control = final_carry_no_control
     (
+        f_end_no_control,
+        Ex_final_no_control,
+        Ey_final_no_control,
+        B_final_no_control,
+        observations_final_no_control,
         electric_energy_E_x_no_control,
         electric_energy_E_y_no_control,
         magnetic_energy_no_control,
@@ -519,7 +535,7 @@ def run_two_stream_simulation_nnx_jnp(
         Fourier_mode_B_no_control,
         Fourier_mode_E_x_no_control,
         Fourier_mode_E_y_no_control,
-    ) = final_outputs_no_control
+    ) = burn_in_outputs
 
     # Split the object into a static graph definition and a dynamic state dictionary
     graphdef, model_state = nnx.split(model)
@@ -550,8 +566,19 @@ def run_two_stream_simulation_nnx_jnp(
         Ey_init_new = Ey_old - Ey_ext_old + Ey_ext_new
 
         # Solve until next external field update
-        return _solve_result_to_scan_outputs(f_old, B_init_new, Ey_init_new, params_new, observations_new,
-                                             updated_model_state)
+        return _solve_result_to_scan_outputs(
+            f_old,
+            B_init_new,
+            Ey_init_new,
+            grid_x,
+            grid_vx,
+            grid_vy,
+            delta_t,
+            n_steps_per_control,
+            params_new,
+            observations_new,
+            updated_model_state
+        )
 
     # Use shape of model output to initialize parameters
     dummy_input = jnp.zeros(window * n_sensors)
@@ -694,4 +721,6 @@ __all__ = [
     "run_two_stream_simulation_adaptive",
     "run_two_stream_simulation_nnx_jnp",
     "run_two_stream_simulation_nnx",
+    "burn_in",
+    "evolve_external_fields",
 ]
