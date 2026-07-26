@@ -4,6 +4,8 @@ import optax
 
 from flax import nnx
 from tqdm import tqdm
+from jax import random
+from math import pi
 
 from vm_control.data import PRECOMPUTED_DIR
 from vm_control.optimizer_objectives import two_stream_nnx_objective
@@ -41,18 +43,25 @@ def main() -> None:
     optimizer = nnx.Optimizer(model, optax.adam(learning_rate=scheduler), wrt=nnx.Param)
 
     @nnx.jit
-    def train_step(model_opt: nnx.Module, opt: nnx.Optimizer):
-        value_and_grad_fn = nnx.value_and_grad(objective)
-        value, grad = value_and_grad_fn(model_opt)
+    def train_step(model_opt: nnx.Module, opt: nnx.Optimizer, key_opt):
+        phase_shift = random.uniform(
+            key_opt,
+            minval=0.0,
+            maxval=2 * pi
+        )
+        value_and_grad_fn = nnx.value_and_grad(objective, argnums=0)
+        value, grad = value_and_grad_fn(model_opt, phase_shift)
         opt.update(model_opt, grad)
         return value
 
     loss_history = []
     best_objective = np.inf
     best_epoch = 0
+    key = random.PRNGKey(0)
 
     for i in tqdm(range(max_iterations)):
-        val = train_step(model, optimizer)
+        key, subkey = random.split(key)
+        val = train_step(model, optimizer, subkey)
         loss_history.append(val)
         if val < best_objective:
             best_objective = val

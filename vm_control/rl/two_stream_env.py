@@ -24,6 +24,7 @@ class TwoStreamEnv(gym.Env):
             v_th: float = 0.2,
             v_bar: float = 0.7,
             alpha: float = 1e-3,
+            phase_shift: float = 0.0,
             K: int = 5,
             max_amplitude: float = 0.1,
     ):
@@ -38,6 +39,7 @@ class TwoStreamEnv(gym.Env):
         self.v_th = v_th
         self.v_bar = v_bar
         self.alpha = alpha
+        self.phase_shift = phase_shift
         self.K = K
         self.max_amplitude = max_amplitude
 
@@ -98,6 +100,7 @@ class TwoStreamEnv(gym.Env):
         rho = np.sum(self.f, axis=(1, 2)) * self.dvx * self.dvy
         rho_observations = np.array([np.mean(chunk) for chunk in np.array_split(rho, self.n_sensors)])
         self.observations = np.concatenate([self.observations[1:], rho_observations[None, ...]], axis=0)
+        self.observations = np.asarray(self.observations, dtype=np.float32)
 
         # Only end once t_end reached
         terminated = False
@@ -118,7 +121,8 @@ class TwoStreamEnv(gym.Env):
                                   self.beta,
                                   self.v_th,
                                   self.v_bar,
-                                  self.alpha)
+                                  self.alpha,
+                                  self.phase_shift)
         (f_burn_in, _, Ey_burn_in, B_burn_in, observations_burn_in, _, _, _, _, _, _, _, _, _,) = burn_in_outputs
 
         # Reset state
@@ -132,6 +136,7 @@ class TwoStreamEnv(gym.Env):
         rho = np.sum(self.f, axis=(1, 2)) * self.dvx * self.dvy
         rho_observations = np.array([np.mean(chunk) for chunk in np.array_split(rho, self.n_sensors)])
         self.observations = np.concatenate([observations_burn_in[1:], rho_observations[None, ...]], axis=0)
+        self.observations = np.asarray(self.observations, dtype=np.float32)
         info = {}
 
         return self.observations.flatten(), info

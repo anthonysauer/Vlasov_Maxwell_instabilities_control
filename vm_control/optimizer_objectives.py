@@ -69,6 +69,7 @@ def two_stream_nnx_objective(
     @nnx.jit
     def objective(
             model: nnx.Module,
+            phase_shift: float = 0.0,
     ):
         two_stream_results, _, _, _ = run_two_stream_simulation_nnx_jnp(
             n_x=n_x,
@@ -79,6 +80,7 @@ def two_stream_nnx_objective(
             delta_t=delta_t,
             delta_t_control=delta_t_control,
             window=window,
+            phase_shift=phase_shift,
             model=model,
         )
         E_x_energy = two_stream_results[1]

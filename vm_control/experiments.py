@@ -118,6 +118,7 @@ def make_two_stream_initial_condition(
         v_th: float = 0.2,
         v_bar: float = 0.7,
         alpha: float = 1e-3,
+        phase_shift: float = 0.0,
         params=None,
 ):
     """Construct the two-stream initial condition.
@@ -130,7 +131,7 @@ def make_two_stream_initial_condition(
     prefactor = 1.0 / (2.0 * jnp.pi * v_th ** 2)
     term_x = jnp.exp(-((VX - v_bar) ** 2) / v_th ** 2) + jnp.exp(-((VX + v_bar) ** 2) / v_th ** 2)
     term_y = jnp.exp(-(VY ** 2) / v_th ** 2)
-    f0 = prefactor * term_x * term_y * (1.0 + alpha * jnp.sin(beta * X))
+    f0 = prefactor * term_x * term_y * (1.0 + alpha * jnp.sin(beta * X + phase_shift))
 
     if params is None:
         B0 = jnp.zeros_like(grid_x)
@@ -453,7 +454,8 @@ def _solve_result_to_scan_outputs(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy
     return carry, outputs
 
 
-def burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th, v_bar, alpha):
+def burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th, v_bar, alpha,
+            phase_shift):
     n_x = grid_x.shape[0]
     dvx = grid_vx[1] - grid_vx[0]
     dvy = grid_vy[1] - grid_vy[0]
@@ -480,6 +482,7 @@ def burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, w
         v_th=v_th,
         v_bar=v_bar,
         alpha=alpha,
+        phase_shift=phase_shift,
     )
     observations_no_control_init = jnp.zeros((window, n_sensors))
     initial_carry_no_control = (f0, jnp.zeros(n_x), Ey0, B0, observations_no_control_init)
@@ -504,6 +507,7 @@ def run_two_stream_simulation_nnx_jnp(
         v_th: float = 0.2,
         v_bar: float = 0.7,
         alpha: float = 1e-3,
+        phase_shift: float = 0.0,
         model: nnx.Module,
 ) -> tuple[tuple[jax.Array, ...], jax.Array, jax.Array, jax.Array]:
     """Run two-stream simulation with adaptive external fields from an nnx model and return jax arrays."""
@@ -518,7 +522,7 @@ def run_two_stream_simulation_nnx_jnp(
     # observation_indices = jnp.round(jnp.linspace(0, n_x - 1, num=n_sensors)).astype(int)
 
     burn_in_outputs = burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th,
-                              v_bar, alpha, )
+                              v_bar, alpha, phase_shift)
 
     (
         f_end_no_control,
