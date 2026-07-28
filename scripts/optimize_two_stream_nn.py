@@ -1,15 +1,19 @@
 import numpy as np
 import orbax.checkpoint as ocp
 import optax
+import jax
+import jax.numpy as jnp
 
 from flax import nnx
 from tqdm import tqdm
 from jax import random
-from math import pi
 
 from vm_control.data import PRECOMPUTED_DIR
 from vm_control.optimizer_objectives import two_stream_nnx_objective
 from vm_control.simple_nn import SimpleNN
+
+BATCH_SIZE = 4
+ACCUMULATION_STEPS = 8
 
 
 def main() -> None:
@@ -40,17 +44,33 @@ def main() -> None:
     initial_learning_rate = 0.001
     max_iterations = 10
     scheduler = optax.cosine_decay_schedule(init_value=initial_learning_rate, decay_steps=max_iterations)
-    optimizer = nnx.Optimizer(model, optax.adam(learning_rate=scheduler), wrt=nnx.Param)
+    base_optimizer = optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adam(learning_rate=scheduler)
+    )
+    optimizer_def = optax.MultiSteps(
+        base_optimizer,
+        every_k_schedule=ACCUMULATION_STEPS
+    )
+    optimizer = nnx.Optimizer(model, optimizer_def, wrt=nnx.Param)
+
+    def batched_objective(model_opt: nnx.Module, phase_shifts: jax.Array):
+        vmapped_objective = nnx.vmap(objective, in_axes=(None, 0))
+
+        # Compute the losses for the entire batch and average them
+        losses = vmapped_objective(model_opt, phase_shifts)
+        return jnp.mean(losses)
 
     @nnx.jit
     def train_step(model_opt: nnx.Module, opt: nnx.Optimizer, key_opt):
-        phase_shift = random.uniform(
+        phase_shifts = random.uniform(
             key_opt,
+            shape=(BATCH_SIZE,),
             minval=0.0,
-            maxval=2 * pi
+            maxval=2 * jnp.pi,
         )
-        value_and_grad_fn = nnx.value_and_grad(objective, argnums=0)
-        value, grad = value_and_grad_fn(model_opt, phase_shift)
+        value_and_grad_fn = nnx.value_and_grad(batched_objective, argnums=0)
+        value, grad = value_and_grad_fn(model_opt, phase_shifts)
         opt.update(model_opt, grad)
         return value
 
@@ -82,7 +102,7 @@ def main() -> None:
 
     # CheckpointManager context to safely handle background tasks
     with ocp.CheckpointManager(checkpoint_dir, options=options) as mngr:
-        mngr.save(best_epoch, args=ocp.args.StandardSave(state))
+        mngr.save(max_iterations - 1, args=ocp.args.StandardSave(state))
         mngr.wait_until_finished()
 
 
