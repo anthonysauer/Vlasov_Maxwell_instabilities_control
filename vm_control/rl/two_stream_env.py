@@ -16,7 +16,7 @@ class TwoStreamEnv(gym.Env):
             n_vx: int = 64,
             n_vy: int = 64,
             n_sensors: int = 8,
-            t_end: float = 2.0,
+            t_end: float = 30.0,
             delta_t: float = 0.1,
             delta_t_control: float = 1.0,
             window: int = 2,
