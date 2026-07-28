@@ -14,3 +14,4 @@ optax
 orbax
 gymnasium
 stable-baselines3[extra]
+sbx-rl

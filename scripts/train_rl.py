@@ -1,4 +1,4 @@
-from stable_baselines3 import SAC
+from sbx import SAC
 from stable_baselines3.common.monitor import Monitor
 
 from vm_control.data import PRECOMPUTED_DIR
