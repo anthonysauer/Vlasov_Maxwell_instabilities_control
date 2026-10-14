@@ -246,30 +246,6 @@ def update_f_E_drift_system(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, del
 
 
 @jit
-def compute_field_energy_kie(rho, dx):
-    """
-    Field energy of the KIE system,
-
-        H_field = int [ rho log(rho) - rho + 1 ] dx,
-
-    the eps -> 0 limit of the quasineutral field energy
-    (eps^2/2) int E_x^2 + int [(U - 1) exp(U) + 1]: the electrostatic term vanishes and,
-    with exp(U) = rho, the electron free-energy term becomes rho log(rho) - rho + 1.
-    This is the quantity that balances the kinetic energy, d/dt H_field = - int E_x j_x dx.
-    The integrand is non-negative with minimum 0 at rho = 1.
-
-    Parameters:
-    - rho: 1D array of charge density (shape: [N_x]).
-    - dx: Grid spacing in x.
-
-    Returns:
-    - Scalar field energy.
-    """
-    rho_safe = jnp.maximum(rho, 1e-12)
-    return jnp.sum(rho_safe * jnp.log(rho_safe) - rho_safe + 1.0) * dx
-
-
-@jit
 def compute_derivative_fourier(h, grid_x):
     """
     Compute the derivative of h with respect to x using Fourier transforms.
@@ -541,7 +517,7 @@ def solver_kie_jit(f_iv, B_iv, E_y_iv, grid_x, grid_vx, grid_vy, delta_t, N_step
     Returns:
     - Tuple containing:
         - f_end: Final distribution function (3D array [N_x, N_vx, N_vy]).
-        - electric_energy_E_x: Array of the KIE field energy int (rho log rho - rho + 1) dx over time (1D array).
+        - electric_energy_E_x: Array of electric energy 0.5 * int E_x^2 dx over time (1D array).
         - electric_energy_E_y: Array of electric energy from E_y over time (1D array).
         - magnetic_energy: Array of magnetic energy over time (1D array).
         - kinetic_energy: Array of kinetic energy over time (1D array).
@@ -636,10 +612,8 @@ def solver_kie_jit(f_iv, B_iv, E_y_iv, grid_x, grid_vx, grid_vy, delta_t, N_step
         carry = (f_new, Ex_new, Ey_new, B_new)
 
         # Compute energies
-        # Field energy in x: for the KIE model this is int (rho log rho - rho + 1) dx, the
-        # quantity that balances the kinetic energy (see compute_field_energy_kie).
-        rho_new = compute_rho(f_new, dvx, dvy)
-        electric_E_x_energy = compute_field_energy_kie(rho_new, dx)
+        # Electric energy in x
+        electric_E_x_energy = 0.5 * jnp.sum(Ex_new ** 2) * dx
         electric_E_y_energy = 0.5 * jnp.sum(Ey_new ** 2) * dx
         magnetic_Energy = 0.5 * jnp.sum(B_new ** 2) * dx
         kinetic_Energy = jnp.sum(

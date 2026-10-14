@@ -303,31 +303,6 @@ def update_f_E_drift_system(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, del
 
 
 @jit
-def compute_field_energy_quasineutral(E, U, dx, eps):
-    """
-    Field energy of the quasineutral (massless-electron) system:
-
-        H_field = (eps^2 / 2) * int E^2 dx  +  int [ (U - 1) exp(U) + 1 ] dx.
-
-    This is the quantity that balances the kinetic energy, i.e.
-        d/dt H_field = - int E_x j_x dx,
-    playing the role that (1/2) int E_x^2 dx plays in Vlasov--Poisson. The "+1" inside
-    the second integral is a constant shift that makes the integrand non-negative
-    (minimum 0 at U = 0), so H_field >= 0 and sqrt(H_field + C) is always defined.
-
-    Parameters:
-    - E: 1D array of electric field (shape: [N_x]).
-    - U: 1D array of potential (shape: [N_x]).
-    - dx: Grid spacing in x.
-    - eps: Scaling parameter.
-
-    Returns:
-    - Scalar field energy.
-    """
-    return 0.5 * eps ** 2 * jnp.sum(E ** 2) * dx + jnp.sum((U - 1.0) * jnp.exp(U) + 1.0) * dx
-
-
-@jit
 def compute_derivative_fourier(h, grid_x):
     """
     Compute the derivative of h with respect to x using Fourier transforms.
@@ -600,7 +575,7 @@ def solver_quasineutral_jit(f_iv, B_iv, E_y_iv, grid_x, grid_vx, grid_vy, delta_
     Returns:
     - Tuple containing:
         - f_end: Final distribution function (3D array [N_x, N_vx, N_vy]).
-        - electric_energy_E_x: Array of electric energy from E_x over time (1D array).
+        - electric_energy_E_x: Array of electric energy 0.5 * int E_x^2 dx over time (1D array).
         - electric_energy_E_y: Array of electric energy from E_y over time (1D array).
         - magnetic_energy: Array of magnetic energy over time (1D array).
         - kinetic_energy: Array of kinetic energy over time (1D array).
@@ -697,11 +672,8 @@ def solver_quasineutral_jit(f_iv, B_iv, E_y_iv, grid_x, grid_vx, grid_vy, delta_
         carry = (f_new, Ex_new, Ey_new, B_new)
 
         # Compute energies
-        # Field energy in x: for the quasineutral model this is the quantity that balances the
-        # kinetic energy (see compute_field_energy_quasineutral), not 0.5 * int E_x^2 dx.
-        rho_new = compute_rho(f_new, dvx, dvy)
-        U_new = potential_from_E(Ex_new, rho_new, grid_x)
-        electric_E_x_energy = compute_field_energy_quasineutral(Ex_new, U_new, dx, eps)
+        # Electric energy in x
+        electric_E_x_energy = 0.5 * jnp.sum(Ex_new ** 2) * dx
         electric_E_y_energy = 0.5 * jnp.sum(Ey_new ** 2) * dx
         magnetic_Energy = 0.5 * jnp.sum(B_new ** 2) * dx
         kinetic_Energy = jnp.sum(
