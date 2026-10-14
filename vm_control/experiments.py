@@ -454,11 +454,49 @@ def _solve_result_to_scan_outputs(f_old, B_old, Ey_old, grid_x, grid_vx, grid_vy
     return carry, outputs
 
 
-def burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th, v_bar, alpha,
-            phase_shift):
+def gaussian_observations(
+        rho: jax.Array,
+        grid_x: jax.Array,
+        observation_locations,
+        observation_radius: float,
+        length_x: float
+) -> jax.Array:
+    def compute_single_observation(x_p):
+        # Calculate periodic distance between grid cells and the probe
+        dx = jnp.abs(grid_x - x_p)
+        dx_periodic = jnp.minimum(dx, length_x - dx)
+
+        # Gaussian weights
+        weights = jnp.exp(-0.5 * (dx_periodic / observation_radius) ** 2)
+
+        # Weighted average of the density
+        return jnp.sum(rho * weights) / jnp.sum(weights)
+
+    # Vectorize the extraction across all 8 probe locations
+    return jax.vmap(compute_single_observation)(observation_locations)
+
+
+def burn_in(
+        grid_x,
+        grid_vx,
+        grid_vy,
+        delta_t,
+        n_steps_per_control,
+        n_sensors,
+        window,
+        beta,
+        v_th,
+        v_bar,
+        alpha,
+        phase_shift
+):
+    length_x = 2.0 * pi / float(beta)
     n_x = grid_x.shape[0]
     dvx = grid_vx[1] - grid_vx[0]
     dvy = grid_vy[1] - grid_vy[0]
+
+    observation_locations = jnp.linspace(0.0, length_x, n_sensors, endpoint=False)
+    observation_radius = (length_x / n_sensors) / 3.0
 
     # Collect initial observations with no control
     def no_control_iteration_step(carry, _):
@@ -466,7 +504,9 @@ def burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, w
 
         # Density observations
         rho = compute_rho(f_old, dvx, dvy)
-        rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
+        # rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
+        rho_observations = gaussian_observations(rho, grid_x, observation_locations, observation_radius, length_x)
+        rho_observations = rho_observations - jnp.mean(rho_observations)
         observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
 
         # Solve until next observation (no control)
@@ -521,6 +561,9 @@ def run_two_stream_simulation_nnx_jnp(
     n_steps_per_control = ceil(float(delta_t_control) / float(delta_t))
     # observation_indices = jnp.round(jnp.linspace(0, n_x - 1, num=n_sensors)).astype(int)
 
+    observation_locations = jnp.linspace(0.0, length_x, n_sensors, endpoint=False)
+    observation_radius = (length_x / n_sensors) / 3.0
+
     burn_in_outputs = burn_in(grid_x, grid_vx, grid_vy, delta_t, n_steps_per_control, n_sensors, window, beta, v_th,
                               v_bar, alpha, phase_shift)
 
@@ -553,7 +596,9 @@ def run_two_stream_simulation_nnx_jnp(
 
         # Density observations
         rho = compute_rho(f_old, dvx, dvy)
-        rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
+        # rho_observations = jnp.array([jnp.mean(chunk) for chunk in jnp.array_split(rho, n_sensors)])
+        rho_observations = gaussian_observations(rho, grid_x, observation_locations, observation_radius, length_x)
+        rho_observations = rho_observations - jnp.mean(rho_observations)
         observations_new = jnp.concatenate([observations_old[1:], rho_observations[None, ...]], axis=0)
 
         # Compute new params based on density observations
