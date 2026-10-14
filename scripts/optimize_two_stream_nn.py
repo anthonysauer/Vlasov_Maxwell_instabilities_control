@@ -12,8 +12,11 @@ from vm_control.data import PRECOMPUTED_DIR
 from vm_control.optimizer_objectives import two_stream_nnx_objective
 from vm_control.simple_nn import SimpleNN
 
-BATCH_SIZE = 4
-ACCUMULATION_STEPS = 8
+BATCH_SIZE = 1
+ACCUMULATION_STEPS = 2
+
+EVAL_SIZE = 2
+EVAL_STEPS = 1
 
 
 def main() -> None:
@@ -41,7 +44,7 @@ def main() -> None:
         rngs=nnx.Rngs(0),
     )
 
-    initial_learning_rate = 0.001
+    initial_learning_rate = 1e-4
     max_iterations = 10
     scheduler = optax.cosine_decay_schedule(init_value=initial_learning_rate, decay_steps=max_iterations)
     base_optimizer = optax.chain(
@@ -74,21 +77,48 @@ def main() -> None:
         opt.update(model_opt, grad)
         return value
 
+    @nnx.jit
+    def eval_step(model_opt: nnx.Module, phase_shifts: jax.Array):
+        return batched_objective(model_opt, phase_shifts)
+
     loss_history = []
+    eval_history = []
     best_objective = np.inf
     best_epoch = 0
+    best_eval = np.inf
+    best_eval_epoch = 0
     key = random.PRNGKey(0)
+
+    key, subkey = random.split(key)
+    eval_phase_shifts = random.uniform(
+        subkey,
+        shape=(EVAL_SIZE,),
+        minval=0.0,
+        maxval=2 * jnp.pi,
+    )
+    eval_phase_shifts_batched = jnp.array_split(eval_phase_shifts, BATCH_SIZE)
 
     for i in tqdm(range(max_iterations)):
         key, subkey = random.split(key)
-        val = train_step(model, optimizer, subkey)
+        val = float(train_step(model, optimizer, subkey))
         loss_history.append(val)
         if val < best_objective:
             best_objective = val
             best_epoch = i
 
+        if i % EVAL_STEPS == 0:
+            eval_loss = 0
+            for eval_phase_shifts_batch in eval_phase_shifts_batched:
+                eval_loss += float(eval_step(model, eval_phase_shifts_batch)) * len(eval_phase_shifts_batch)
+            eval_loss = eval_loss / EVAL_SIZE
+            eval_history.append(eval_loss)
+            if eval_loss < best_eval:
+                best_eval = eval_loss
+                best_eval_epoch = i
+
     output_dict = {
         "loss_history": np.asarray(loss_history),
+        "eval_history": np.asarray(eval_history),
         "best_objective": best_objective,
         "best_epoch": best_epoch,
     }
@@ -102,7 +132,7 @@ def main() -> None:
 
     # CheckpointManager context to safely handle background tasks
     with ocp.CheckpointManager(checkpoint_dir, options=options) as mngr:
-        mngr.save(max_iterations - 1, args=ocp.args.StandardSave(state))
+        mngr.save(best_eval_epoch, args=ocp.args.StandardSave(state))
         mngr.wait_until_finished()
 
 
