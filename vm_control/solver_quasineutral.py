@@ -358,13 +358,13 @@ def HE_update(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, B_old, delta_t):
     """
 
     # ---------------------------
-    # Step 8: Update B_new
+    # Step 1: Update B_new
     # ---------------------------
     d_x_Ey = compute_derivative_fourier(Ey_old, grid_x)
     B_new = B_old - delta_t * d_x_Ey  # Shape: [N_x]
 
     # ---------------------------
-    # Step 9: Update f using bispline interpolation
+    # Step 2: Update f using bispline interpolation
     # ---------------------------
 
     # Compute shifts
@@ -409,7 +409,7 @@ def HE_update(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, B_old, delta_t):
     f_new = interpolate_f_vmapped(shift_vx, shift_vy, f_old)  # Shape: [N_x, N_vx, N_vy]
 
     # ---------------------------
-    # Step 10: E_new remains the same as E_old
+    # Step 3: E_new remains the same as E_old
     # ---------------------------
     Ex_new = Ex_old
     Ey_new = Ey_old
