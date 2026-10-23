@@ -337,8 +337,7 @@ def Hf_update(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, B_old, delta_t, e
 @jit
 def HE_update(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, B_old, delta_t):
     """
-    Update the distribution function f, magnetic field B, and quantities r_x and r_y
-    using the second subsystem equations.
+    Update the distribution function f, magnetic field B using the second subsystem equations.
     
     Parameters:
     - grid_x: 1D array of x-coordinates (shape: [N_x]).
