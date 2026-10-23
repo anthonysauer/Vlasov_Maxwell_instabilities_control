@@ -114,10 +114,7 @@ def solve_quasineutral(rho, grid_x, eps, n_newton=6):
     The spectral second-derivative matrix is used so that E is consistent with
     compute_derivative_fourier.
 
-    The initial guess U = log(rho) is the eps -> 0 (quasineutral) limit, so for
-    eps ~ 1e-3 Newton converges in 2-3 iterations. Unlike the linear Poisson case
-    there is no k = 0 compatibility condition: the mean of U is fixed by
-    int exp(U) dx = int rho dx.
+    The initial guess U = log(rho) is the eps -> 0 (quasineutral) limit.
 
     Parameters:
     - rho: 1D array of ion charge density (shape: [N_x]).
