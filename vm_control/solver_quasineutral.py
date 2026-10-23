@@ -153,36 +153,6 @@ def solve_quasineutral(rho, grid_x, eps, n_newton=6):
 
 
 @jit
-def potential_from_E(E, rho, grid_x):
-    """
-    Recover the potential U from E = -d_x U on the periodic grid.
-
-    The spectral antiderivative fixes U up to a constant; the constant is fixed by
-    the compatibility condition of the quasineutral equation, int exp(U) dx = int rho dx
-    (obtained by integrating eps^2 d_xx U = exp(U) - rho over the period).
-
-    Parameters:
-    - E: 1D array of electric field (shape: [N_x]).
-    - rho: 1D array of charge density (shape: [N_x]).
-    - grid_x: 1D array of x-coordinates (shape: [N_x]).
-
-    Returns:
-    - U: 1D array of potential (shape: [N_x]).
-    """
-    N_x = grid_x.shape[0]
-    dx = grid_x[1] - grid_x[0]
-    k = jnp.fft.fftfreq(N_x, d=dx) * 2.0 * jnp.pi
-    ik_safe = jnp.where(k != 0, 1j * k, 1.0)
-
-    E_hat = jnp.fft.fft(E)
-    U_hat = jnp.where(k != 0, -E_hat / ik_safe, 0.0)  # zero-mean antiderivative of -E
-    U0 = jnp.fft.ifft(U_hat).real
-
-    c = jnp.log(jnp.sum(rho) / jnp.sum(jnp.exp(U0)))
-    return U0 + c
-
-
-@jit
 def update_f_E_drift_system(grid_x, grid_vx, grid_vy, f_old, Ex_old, Ey_old, delta_t, eps):
     """
     Update the distribution function f and electric fields E_x and E_y using the drift equation.
