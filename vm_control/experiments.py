@@ -18,6 +18,123 @@ from flax import nnx
 
 from .profiles import two_stream_best_params
 from .solver import solver_jit, compute_rho
+from .solver_quasineutral import solver_quasineutral_jit
+from .solver_kie import solver_kie_jit
+
+
+def make_landau_initial_condition(
+        grid_x,
+        grid_vx,
+        grid_vy,
+        *,
+        beta: float = 0.5,
+        v_th: float = 1.0,
+        alpha: float = 1e-2,
+        phase_shift: float = 0.0,
+        params=None,
+):
+    """Construct the Maxwellian-with-density-perturbation initial condition.
+
+    f0(x, v) = (1 / (pi v_th^2)) exp(-(v_x^2 + v_y^2) / v_th^2) * (1 + alpha sin(beta x + phase_shift)),
+    normalised so that rho(x) = 1 + alpha sin(beta x + phase_shift).  alpha = 0 is an exact
+    spatially homogeneous equilibrium and should stay stationary.
+
+    ``params`` has the same meaning as in make_two_stream_initial_condition: ``None`` for
+    E_y = B = 0, otherwise a flat array of length 4K or an array of shape (K, 4) with
+    columns (a_k, b_k, c_k, d_k).
+    """
+    X, VX, VY = jnp.meshgrid(grid_x, grid_vx, grid_vy, indexing="ij")
+    prefactor = 1.0 / (jnp.pi * v_th ** 2)
+    maxwellian = jnp.exp(-(VX ** 2 + VY ** 2) / v_th ** 2)
+    f0 = prefactor * maxwellian * (1.0 + alpha * jnp.sin(beta * X + phase_shift))
+
+    if params is None:
+        B0 = jnp.zeros_like(grid_x)
+        Ey0 = jnp.zeros_like(grid_x)
+    else:
+        params = jnp.asarray(params, dtype=jnp.float32).reshape((-1, 4))
+        k_count = params.shape[0]
+        cos_array = jnp.stack([jnp.cos((k + 1) * beta * grid_x) for k in range(k_count)], axis=0)
+        sin_array = jnp.stack([jnp.sin((k + 1) * beta * grid_x) for k in range(k_count)], axis=0)
+        a, b, c, d = params[:, 0:1], params[:, 1:2], params[:, 2:3], params[:, 3:4]
+        B0 = jnp.sum((a - d) * cos_array + (b - c) * sin_array, axis=0)
+        Ey0 = jnp.sum((a + d) * cos_array + (b + c) * sin_array, axis=0)
+    return f0, B0, Ey0
+
+
+def run_landau_simulation_jnp(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 20.0,
+        delta_t: float = 0.1,
+        beta: float = 0.5,
+        v_th: float = 1.0,
+        alpha: float = 1e-2,
+        v_max: float = 5.0,
+        params=None,
+        model: str = "quasineutral",
+        eps: float = 1.0,
+) -> tuple[tuple[jax.Array, ...], jax.Array, jax.Array, jax.Array]:
+    """Run one Landau-damping simulation with the quasineutral (``model="quasineutral"``,
+    scaling parameter ``eps``) or KIE (``model="kie"``) solver.  The tracked Fourier mode is
+    k_track = 1, i.e. the perturbed wavenumber beta (the box length is 2 pi / beta)."""
+    length_x = 2.0 * pi / float(beta)
+    spec = GridSpec(n_x, n_vx, n_vy, 0.0, length_x, -v_max, v_max, -v_max, v_max)
+    grid_x, grid_vx, grid_vy = make_grids(spec)
+    f0, B0, Ey0 = make_landau_initial_condition(
+        grid_x,
+        grid_vx,
+        grid_vy,
+        beta=beta,
+        v_th=v_th,
+        alpha=alpha,
+        params=params,
+    )
+    n_steps = ceil(float(t_end) / float(delta_t))
+    if model == "quasineutral":
+        result = solver_quasineutral_jit(
+            f0, B0, Ey0, grid_x, grid_vx, grid_vy, float(delta_t), n_steps, 1, eps=float(eps))
+    elif model == "kie":
+        result = solver_kie_jit(
+            f0, B0, Ey0, grid_x, grid_vx, grid_vy, float(delta_t), n_steps, 1)
+    else:
+        raise ValueError(f"unknown model {model!r}; expected 'quasineutral' or 'kie'")
+    return result, grid_x, grid_vx, grid_vy
+
+
+def run_landau_simulation(
+        *,
+        n_x: int = 32,
+        n_vx: int = 64,
+        n_vy: int = 64,
+        t_end: float = 20.0,
+        delta_t: float = 0.1,
+        beta: float = 0.5,
+        v_th: float = 1.0,
+        alpha: float = 1e-2,
+        v_max: float = 5.0,
+        params=None,
+        model: str = "quasineutral",
+        eps: float = 1.0,
+) -> Dict[str, np.ndarray]:
+    """Run one Landau-damping simulation and return NumPy arrays."""
+    result, grid_x, grid_vx, grid_vy = run_landau_simulation_jnp(
+        n_x=n_x,
+        n_vx=n_vx,
+        n_vy=n_vy,
+        t_end=t_end,
+        delta_t=delta_t,
+        beta=beta,
+        v_th=v_th,
+        alpha=alpha,
+        v_max=v_max,
+        params=params,
+        model=model,
+        eps=eps,
+    )
+    return _solver_result_to_dict(result, delta_t, grid_x, grid_vx, grid_vy)
 
 
 @dataclass(frozen=True)
@@ -178,7 +295,7 @@ def run_two_stream_simulation_jnp(
         params=params,
     )
     n_steps = ceil(float(t_end) / float(delta_t))
-    result = solver_jit(f0, B0, Ey0, grid_x, grid_vx, grid_vy, float(delta_t), n_steps, 1)
+    result = solver_quasineutral_jit(f0, B0, Ey0, grid_x, grid_vx, grid_vy, float(delta_t), n_steps, 1, eps=1)
     return result, grid_x, grid_vx, grid_vy
 
 
@@ -727,8 +844,8 @@ def _solver_result_to_dict(result, delta_t: float, grid_x, grid_vx, grid_vy) -> 
         E_y_energy,
         B_energy,
         kinetic_energy,
-        r_x_history,
-        r_y_history,
+        # r_x_history,
+        # r_y_history,
         F_B,
         F_Ex,
         F_Ey,
@@ -744,8 +861,8 @@ def _solver_result_to_dict(result, delta_t: float, grid_x, grid_vx, grid_vy) -> 
         "E_y_energy": np.asarray(E_y_energy),
         "B_energy": np.asarray(B_energy),
         "kinetic_energy": np.asarray(kinetic_energy),
-        "r_x_history": np.asarray(r_x_history),
-        "r_y_history": np.asarray(r_y_history),
+        # "r_x_history": np.asarray(r_x_history),
+        # "r_y_history": np.asarray(r_y_history),
         "F_B": np.asarray(F_B),
         "F_Ex": np.asarray(F_Ex),
         "F_Ey": np.asarray(F_Ey),
@@ -763,6 +880,8 @@ __all__ = [
     "make_grids",
     "make_weibel_initial_condition",
     "make_two_stream_initial_condition",
+    "make_landau_initial_condition",
+    "run_landau_simulation_jnp",
     "run_weibel_simulation",
     "run_two_stream_simulation_jnp",
     "run_two_stream_simulation",
